@@ -35,19 +35,108 @@ Two phases produce two kinds of number:
 
 ## Results
 
-**Not published yet.** The suite runs and its correctness gate passes, but no
-measurement taken so far is fit to publish.
+Measured 2026-08-13 on an idle Linux server — Xeon E3-1230 v6 (4 cores,
+hyper-threading off, governor pinned to `performance`), Ubuntu 24.04, Go 1.26.4.
+goichi v0.2.0, fiber v3.4.0, gin v1.12.0, echo v4.15.4, chi v5.3.1, atreugo
+v11.13.2. Raw run: [`results/linux-v0.2.0.json`](results/linux-v0.2.0.json).
 
-Every run made during development was made on a thermally constrained laptop
-with a hybrid P-core/E-core mobile CPU, and the HTTP numbers from it turned out
-to be measuring the machine rather than the frameworks: see the timer period
-note under [How the comparison is kept honest](#how-the-comparison-is-kept-honest).
-With that fixed the spread falls from a median of ±61% to under ±5%, which is
-the difference between numbers that rank six frameworks and numbers that rank
-nothing.
+![HTTP throughput](docs/throughput.svg)
 
-The published figures will come from a quiet Linux host. Until they do, this
-repository is the method and the tooling, not the answer.
+Requests per second, median of three measured windows, every framework passing
+the correctness gate with zero errors:
+
+| scenario | atreugo | fiber | goichi | gin | echo | chi |
+|---|---|---|---|---|---|---|
+| `static` | 130,748 | 129,860 | **114,098** | 79,017 | 79,062 | 76,327 |
+| `param` | 128,916 | 125,460 | **103,018** | 74,879 | 74,549 | 71,208 |
+| `params3` | 120,105 | 119,211 | **101,800** | 73,943 | 73,304 | 70,051 |
+| `json` | 121,666 | 116,919 | **103,947** | 72,144 | 71,382 | 69,613 |
+| `post` | 101,438 | 96,964 | **95,093** | 57,128 | 57,833 | 58,574 |
+| `many` | 125,464 | 106,529 | **103,938** | 74,693 | 73,712 | 70,657 |
+
+The frameworks separate into two groups, and the split is the HTTP stack rather
+than the router: atreugo and fiber sit on fasthttp, gin, echo and chi sit on
+`net/http`, and goichi — also on `net/http` — lands between them, 38–66% above
+the other `net/http` routers on every scenario and 1.9–17.9% below fiber. On
+`post` the gap to fiber is 1.9%, which is inside the run-to-run drift measured
+below; on `static` it is 12.1%, which is not.
+
+![Server CPU per request](docs/server-cpu.svg)
+
+Throughput on loopback is bounded by the socket as much as by the framework, so
+the server's own CPU time per request is the figure that keeps separating them
+after the network path stops:
+
+| µs of server CPU per request | `static` | `params3` | `post` |
+|---|---|---|---|
+| fiber | 12.6 | 14.5 | 18.6 |
+| atreugo | 12.7 | 14.6 | 17.7 |
+| **goichi** | **15.1** | **17.3** | **19.1** |
+| gin | 23.1 | 24.8 | 32.3 |
+| echo | 23.2 | 25.2 | 32.3 |
+| chi | 24.2 | 26.4 | 32.1 |
+
+### What v0.2.0 changed
+
+goichi v0.2.0 stopped copying the parameter map on every candidate branch while
+matching. The same six scenarios, same host, v0.1.0 against v0.2.0:
+
+| scenario | v0.1.0 | v0.2.0 | | allocs/op |
+|---|---|---|---|---|
+| `params3` | 84,322 | 101,800 | **+20.7%** | 16 → 5 |
+| `many` | 87,485 | 103,938 | **+18.8%** | 22 → 5 |
+| `post` | 86,594 | 95,093 | +9.8% | 7 → 5 |
+| `json` | 95,669 | 103,947 | +8.7% | 7 → 3 |
+| `param` | 97,370 | 103,018 | +5.8% | 8 → 5 |
+| `static` | 111,896 | 114,098 | +2.0% | 4 → 2 |
+
+The gain lands where the change predicts it should: the routes that capture the
+most parameters gain the most, and `static` — which never touched the parameter
+map — barely moves. A result shaped the other way round would have meant the
+measurement, not the router, had changed.
+
+Both runs are in `results/`, so the verdict can be re-derived without measuring
+anything:
+
+```bash
+go run ./cmd/compare -base results/linux-v0.1.0.json -new results/linux-v0.2.0.json
+```
+
+### How much of this is noise
+
+The v0.1.0 and v0.2.0 runs measured all six frameworks, so the five whose code
+did not change between them are a control group for the host itself:
+
+| `static`, unchanged frameworks | v0.1.0 run | v0.2.0 run | drift |
+|---|---|---|---|
+| atreugo | 130,131 | 130,748 | +0.5% |
+| fiber | 128,721 | 129,860 | +0.9% |
+| gin | 79,558 | 79,017 | −0.7% |
+| echo | 77,997 | 79,062 | +1.4% |
+| chi | 75,035 | 76,327 | +1.7% |
+
+Across all six scenarios those five frameworks drift by at most 2.9% between the
+two runs, a median of 0.8%, and the spread inside a single run is ±0.3–4.6%
+(median ±1.4%). Differences smaller than that are not differences — which is why
+the 1.9% between goichi and fiber on `post` is reported as a tie and the 20.7%
+on `params3` is not.
+
+The host is not otherwise idle: it runs a Kubernetes control plane and a
+Prometheus instance that together hold about 7% of its CPU throughout. That
+background is the same for every framework and it is included in the drift
+figures above, but it is a reason to reproduce these numbers rather than trust
+them.
+
+### In-process figures
+
+The in-process phase measures allocations, and there goichi's `post` path is the
+lightest in the comparison — 5 allocations per request against fiber's 9 and
+gin's 14. Its nanoseconds-per-operation figures, however, are the slowest here
+(855 ns on `static` against fiber's 115 ns), which is not consistent with its
+HTTP result and should not be read as a cross-framework ranking: the phase calls
+each framework's own handler through each framework's own request object, and
+those are not the same object. Its job is to compare a framework against its own
+past, which is what the table above uses it for.
 
 Charts and the HTML report are generated into `docs/` by `cmd/report`, and the
 raw measurements land in `results/`, one JSON file per run.
