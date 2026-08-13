@@ -1,0 +1,16 @@
+# Build output
+/bin/
+*.exe
+*.test
+
+# Local, uncommitted measurements. Published runs live in results/ under their
+# own name; scratch runs do not.
+/results/scratch*.json
+/results/tmp*.json
+
+# Editors
+.vscode/
+.idea/
+
+# Local session notes
+.claude/

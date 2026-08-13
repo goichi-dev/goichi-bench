@@ -1,0 +1,7 @@
+# Auto detect text files and perform LF normalization
+* text=auto
+
+# Generated charts are text, but reviewing their diffs is never useful.
+docs/*.svg linguist-generated=true
+docs/index.html linguist-generated=true
+results/*.json linguist-generated=true
