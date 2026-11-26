@@ -35,116 +35,17 @@ Two phases produce two kinds of number:
 
 ## Results
 
-Measured 2026-08-13 on an idle Linux server — Xeon E3-1230 v6 (4 cores,
-hyper-threading off, governor pinned to `performance`), Ubuntu 24.04, Go 1.26.4.
-goichi v0.2.0, fiber v3.4.0, gin v1.12.0, echo v4.15.4, chi v5.3.1, atreugo
-v11.13.2. Raw run: [`results/linux-v0.2.0.json`](results/linux-v0.2.0.json).
-goichi v0.5.0 was measured later, on another host; see
-[goichi v0.5.0, on a second host](#goichi-v050-on-a-second-host).
+Measured 2026-11-26 on a Linux server, Rocky Linux 10.2: a dual Xeon Gold 6138
+(2 × 20 cores, 80 threads) with the governor at `performance`. The run was pinned
+with `taskset` to four physical cores on one NUMA node, two for the server and
+two for the load generator. Go 1.26.4. goichi v0.5.0, fiber v3.4.0, gin v1.12.0,
+echo v4.15.4, chi v5.3.1, atreugo v11.13.2. Raw run:
+[`results/r640-v0.5.0.json`](results/r640-v0.5.0.json).
 
 ![HTTP throughput](docs/throughput.svg)
 
 Requests per second, median of three measured windows, every framework passing
 the correctness gate with zero errors:
-
-| scenario | atreugo | fiber | goichi | gin | echo | chi |
-|---|---|---|---|---|---|---|
-| `static` | 130,748 | 129,860 | **114,098** | 79,017 | 79,062 | 76,327 |
-| `param` | 128,916 | 125,460 | **103,018** | 74,879 | 74,549 | 71,208 |
-| `params3` | 120,105 | 119,211 | **101,800** | 73,943 | 73,304 | 70,051 |
-| `json` | 121,666 | 116,919 | **103,947** | 72,144 | 71,382 | 69,613 |
-| `post` | 101,438 | 96,964 | **95,093** | 57,128 | 57,833 | 58,574 |
-| `many` | 125,464 | 106,529 | **103,938** | 74,693 | 73,712 | 70,657 |
-
-The frameworks separate into two groups, and the split is the HTTP stack rather
-than the router: atreugo, fiber and goichi sit on fasthttp, gin, echo and chi
-sit on `net/http`. goichi is the slowest of the fasthttp group, 1.9–17.9% below
-fiber, and 38–66% above the `net/http` routers on every scenario — a lead that
-belongs mostly to fasthttp, not to goichi's router. On `post` the gap to fiber
-is 1.9%, which is inside the run-to-run drift measured below; on `static` it is
-12.1%, which is not.
-
-![Server CPU per request](docs/server-cpu.svg)
-
-Throughput on loopback is bounded by the socket as much as by the framework, so
-the server's own CPU time per request is the figure that keeps separating them
-after the network path stops:
-
-| µs of server CPU per request | `static` | `params3` | `post` |
-|---|---|---|---|
-| fiber | 12.6 | 14.5 | 18.6 |
-| atreugo | 12.7 | 14.6 | 17.7 |
-| **goichi** | **15.1** | **17.3** | **19.1** |
-| gin | 23.1 | 24.8 | 32.3 |
-| echo | 23.2 | 25.2 | 32.3 |
-| chi | 24.2 | 26.4 | 32.1 |
-
-### What v0.2.0 changed
-
-goichi v0.2.0 stopped copying the parameter map on every candidate branch while
-matching. The same six scenarios, same host, v0.1.0 against v0.2.0:
-
-| scenario | v0.1.0 | v0.2.0 | | allocs/op |
-|---|---|---|---|---|
-| `params3` | 84,322 | 101,800 | **+20.7%** | 16 → 5 |
-| `many` | 87,485 | 103,938 | **+18.8%** | 22 → 5 |
-| `post` | 86,594 | 95,093 | +9.8% | 7 → 5 |
-| `json` | 95,669 | 103,947 | +8.7% | 7 → 3 |
-| `param` | 97,370 | 103,018 | +5.8% | 8 → 5 |
-| `static` | 111,896 | 114,098 | +2.0% | 4 → 2 |
-
-The gain lands where the change predicts it should: the routes that capture the
-most parameters gain the most, and `static` — which never touched the parameter
-map — barely moves. A result shaped the other way round would have meant the
-measurement, not the router, had changed.
-
-Both runs are in `results/`, so the verdict can be re-derived without measuring
-anything:
-
-```bash
-go run ./cmd/compare -base results/linux-v0.1.0.json -new results/linux-v0.2.0.json
-```
-
-### How much of this is noise
-
-The v0.1.0 and v0.2.0 runs measured all six frameworks, so the five whose code
-did not change between them are a control group for the host itself:
-
-| `static`, unchanged frameworks | v0.1.0 run | v0.2.0 run | drift |
-|---|---|---|---|
-| atreugo | 130,131 | 130,748 | +0.5% |
-| fiber | 128,721 | 129,860 | +0.9% |
-| gin | 79,558 | 79,017 | −0.7% |
-| echo | 77,997 | 79,062 | +1.4% |
-| chi | 75,035 | 76,327 | +1.7% |
-
-Across all six scenarios those five frameworks drift by at most 2.9% between the
-two runs, a median of 0.8%, and the spread inside a single run is ±0.3–4.6%
-(median ±1.4%). Differences smaller than that are not differences — which is why
-the 1.9% between goichi and fiber on `post` is reported as a tie and the 20.7%
-on `params3` is not.
-
-The host is not otherwise idle: it runs a Kubernetes control plane and a
-Prometheus instance that together hold about 7% of its CPU throughout. That
-background is the same for every framework and it is included in the drift
-figures above, but it is a reason to reproduce these numbers rather than trust
-them.
-
-### goichi v0.5.0, on a second host
-
-The figures above are goichi v0.2.0 on the Xeon E3-1230 v6. goichi v0.5.0 was
-measured on 2026-11-26 on a different machine, so its numbers are compared
-only with a v0.2.0 run made on that same machine the same afternoon, never with
-the tables above.
-
-The host is a dual Xeon Gold 6138 (2 × 20 cores, 80 threads) that also runs a
-Kubernetes test environment. Both runs were pinned with `taskset` to four
-physical cores on one NUMA node (2 for the server, 2 for the load generator,
-the same split as above), started only after the machine had been at least 97%
-idle for several minutes, and checked every two minutes for competing load.
-Go 1.26.4, the same versions of the other five frameworks. Raw runs:
-[`results/r640-v0.2.0.json`](results/r640-v0.2.0.json) and
-[`results/r640-v0.5.0.json`](results/r640-v0.5.0.json).
 
 | scenario | atreugo | fiber | goichi | gin | echo | chi |
 |---|---|---|---|---|---|---|
@@ -155,10 +56,33 @@ Go 1.26.4, the same versions of the other five frameworks. Raw runs:
 | `post` | 81,970 | 79,109 | **80,724** | 50,107 | 49,942 | 50,350 |
 | `many` | 108,234 | 89,328 | **88,558** | 66,536 | 65,474 | 62,086 |
 
-goichi keeps its place: third of six, 31–62% above gin, echo and chi, and
-0.9–17.0% below fiber, with `post` (+2.0%) and `many` (−0.9%) inside the noise.
+The frameworks separate into two groups, and the split is the HTTP stack rather
+than the router: atreugo, fiber and goichi sit on fasthttp, gin, echo and chi
+sit on `net/http`. goichi is the slowest of the fasthttp group, 0.9–17.0% below
+fiber, and 31–62% above the `net/http` routers on every scenario — a lead that
+belongs mostly to fasthttp, not to goichi's router. On `post` (+2.0%) and
+`many` (−0.9%) goichi and fiber are within the run-to-run drift measured below,
+so those are ties; on `static` (−9.4%) and `param` (−17.0%) the gap is real.
 
-Against v0.2.0 on the same host:
+![Server CPU per request](docs/server-cpu.svg)
+
+Throughput on loopback is bounded by the socket as much as by the framework, so
+the server's own CPU time per request is the figure that keeps separating them
+after the network path stops:
+
+| µs of server CPU per request | `static` | `params3` | `post` |
+|---|---|---|---|
+| atreugo | 11.3 | 13.8 | 18.1 |
+| fiber | 11.5 | 13.4 | 19.2 |
+| **goichi** | **14.4** | **16.8** | **18.3** |
+| gin | 24.1 | 25.6 | 35.1 |
+| echo | 24.1 | 26.0 | 35.2 |
+| chi | 25.0 | 27.7 | 35.0 |
+
+### What v0.5.0 changed
+
+A v0.2.0 run was made on the same host the same afternoon, right before the
+v0.5.0 one: [`results/r640-v0.2.0.json`](results/r640-v0.2.0.json).
 
 | scenario | v0.2.0 | v0.5.0 | | µs server CPU/req | allocs/op |
 |---|---|---|---|---|---|
@@ -169,10 +93,12 @@ Against v0.2.0 on the same host:
 | `post` | 76,206 | 80,724 | **+5.9%** | 19.6 → 18.3 | 5 → **6** |
 | `params3` | 82,174 | 86,320 | **+5.0%** | 17.8 → 16.8 | 5 → 5 |
 
-The five other frameworks are the control: across all six scenarios they moved
-by a median of 0.8% and at most 4.9% between the two runs, and the spread
-inside a run was a median of ±1.0% (at most ±6.2%). goichi gained 5.0–10.3% on
-every scenario and spent 6–8% less server CPU per request, so the gain is real.
+goichi gained 5.0–10.3% on every scenario and spent 6–8% less server CPU per
+request, well clear of the noise measured below, so the gain is real.
+
+```bash
+go run ./cmd/compare -base results/r640-v0.2.0.json -new results/r640-v0.5.0.json
+```
 
 It cannot be pinned on one change. v0.2.0 to v0.5.0 updates goichi's own
 dependencies, among them `fasthttp` v1.73.0 to v1.80.0 and `goccy/go-json`
@@ -199,19 +125,75 @@ the copy with `DecodeNoCopyString`, but goichi decodes straight from fasthttp's
 request buffer, which is reused after the request, so a string kept by a
 handler would be overwritten. The copy is the correct trade.
 
+### How much of this is noise
+
+The v0.2.0 and v0.5.0 runs measured all six frameworks, so the five whose code
+did not change between them are a control group for the host itself:
+
+| `static`, unchanged frameworks | v0.2.0 run | v0.5.0 run | drift |
+|---|---|---|---|
+| atreugo | 104,774 | 105,525 | +0.7% |
+| fiber | 105,613 | 104,890 | −0.7% |
+| gin | 69,097 | 69,275 | +0.3% |
+| echo | 68,720 | 69,111 | +0.6% |
+| chi | 66,210 | 66,921 | +1.1% |
+
+Across all six scenarios those five frameworks drift by at most 4.9% between the
+two runs, a median of 0.8%, and the spread inside the v0.5.0 run is
+±0.2–5.8% (median ±1.2%). Differences smaller than that are not differences —
+which is why the 2.0% between goichi and fiber on `post` is reported as a tie
+and the 17.0% on `param` is not.
+
+The host is not otherwise idle: it also runs a Kubernetes test environment. The
+runs were started only after it had been at least 97% idle for several minutes,
+and it was checked every two minutes for competing load. The pinned cores keep
+the benchmark off the rest of the machine, not the rest of the machine off them,
+so the drift figures above include that background. It is a reason to reproduce
+these numbers rather than trust them.
+
 ### In-process figures
 
 The in-process phase measures allocations, and there goichi's `post` path is the
-lightest in the comparison — 5 allocations per request against fiber's 9 and
+lightest in the comparison — 6 allocations per request against fiber's 9 and
 gin's 14. Its nanoseconds-per-operation figures, however, are the slowest here
-(855 ns on `static` against fiber's 115 ns), which is not consistent with its
+(1,495 ns on `static` against fiber's 365 ns), which is not consistent with its
 HTTP result and should not be read as a cross-framework ranking: the phase calls
 each framework's own handler through each framework's own request object, and
 those are not the same object. Its job is to compare a framework against its own
-past, which is what the table above uses it for.
+past, which is what the v0.2.0 → v0.5.0 table above uses it for.
 
 Charts and the HTML report are generated into `docs/` by `cmd/report`, and the
 raw measurements land in `results/`, one JSON file per run.
+
+### Earlier results: Xeon E3-1230 v6, 2026-08-13
+
+The first published runs were made on a different machine — Xeon E3-1230 v6 (4
+cores, hyper-threading off, governor pinned to `performance`), Ubuntu 24.04,
+Go 1.26.4 — so their figures are not comparable with the tables above. On that
+host goichi v0.2.0 also came third of six. Raw runs:
+[`results/linux-v0.1.0.json`](results/linux-v0.1.0.json) and
+[`results/linux-v0.2.0.json`](results/linux-v0.2.0.json).
+
+goichi v0.2.0 stopped copying the parameter map on every candidate branch while
+matching. v0.1.0 against v0.2.0 on that host:
+
+| scenario | v0.1.0 | v0.2.0 | | allocs/op |
+|---|---|---|---|---|
+| `params3` | 84,322 | 101,800 | **+20.7%** | 16 → 5 |
+| `many` | 87,485 | 103,938 | **+18.8%** | 22 → 5 |
+| `post` | 86,594 | 95,093 | +9.8% | 7 → 5 |
+| `json` | 95,669 | 103,947 | +8.7% | 7 → 3 |
+| `param` | 97,370 | 103,018 | +5.8% | 8 → 5 |
+| `static` | 111,896 | 114,098 | +2.0% | 4 → 2 |
+
+The gain lands where the change predicts it should: the routes that capture the
+most parameters gain the most, and `static` — which never touched the parameter
+map — barely moves. The five unchanged frameworks drifted by at most 2.9%
+between those two runs (median 0.8%).
+
+```bash
+go run ./cmd/compare -base results/linux-v0.1.0.json -new results/linux-v0.2.0.json
+```
 
 ## Running it
 
