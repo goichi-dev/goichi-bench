@@ -57,11 +57,12 @@ the correctness gate with zero errors:
 | `many` | 125,464 | 106,529 | **103,938** | 74,693 | 73,712 | 70,657 |
 
 The frameworks separate into two groups, and the split is the HTTP stack rather
-than the router: atreugo and fiber sit on fasthttp, gin, echo and chi sit on
-`net/http`, and goichi — also on `net/http` — lands between them, 38–66% above
-the other `net/http` routers on every scenario and 1.9–17.9% below fiber. On
-`post` the gap to fiber is 1.9%, which is inside the run-to-run drift measured
-below; on `static` it is 12.1%, which is not.
+than the router: atreugo, fiber and goichi sit on fasthttp, gin, echo and chi
+sit on `net/http`. goichi is the slowest of the fasthttp group, 1.9–17.9% below
+fiber, and 38–66% above the `net/http` routers on every scenario — a lead that
+belongs mostly to fasthttp, not to goichi's router. On `post` the gap to fiber
+is 1.9%, which is inside the run-to-run drift measured below; on `static` it is
+12.1%, which is not.
 
 ![Server CPU per request](docs/server-cpu.svg)
 
@@ -175,16 +176,28 @@ every scenario and spent 6–8% less server CPU per request, so the gain is real
 
 It cannot be pinned on one change. v0.2.0 to v0.5.0 updates goichi's own
 dependencies, among them `fasthttp` v1.73.0 to v1.80.0 and `goccy/go-json`
-v0.10.6 to v0.12.0. The `fasthttp` update is forced on fiber and atreugo too,
-because a module graph carries one version of it, and the load generator uses
-it as well. Neither of those two frameworks moved, which suggests `fasthttp` is
-not where goichi's gain comes from, but this benchmark does not separate the
-causes.
+v0.10.6 to v0.12.0. goichi serves on `fasthttp`, and the update is forced on
+fiber and atreugo too, because a module graph carries one version of it; the
+load generator uses it as well. Neither of those two frameworks moved, which
+suggests `fasthttp` is not where goichi's gain comes from, but this benchmark
+does not separate the causes.
 
 `post` now makes one more allocation per request (5 → 6) while allocating 19%
 fewer bytes (213 → 173 B). `cmd/compare` reports that as a regression, as it
 should: allocation counts are deterministic. It is not visible in throughput or
 CPU time, which both improved.
+
+The extra allocation comes from `goccy/go-json` v0.12.0, not from goichi, whose
+request path did not change between the two releases. Decoding this body alone
+takes 2 allocations and 128 B with v0.10.6 and 3 allocations and 88 B with
+v0.12.0 — the whole difference the benchmark sees. Older versions copied the
+input once and let every decoded string point into that copy; v0.12.0 reuses
+its input buffer and copies each string out on its own, as `encoding/json`
+does, so a decoded string no longer keeps the whole body alive. The request
+body here has two string fields, hence one allocation more. go-json can skip
+the copy with `DecodeNoCopyString`, but goichi decodes straight from fasthttp's
+request buffer, which is reused after the request, so a string kept by a
+handler would be overwritten. The copy is the correct trade.
 
 ### In-process figures
 
