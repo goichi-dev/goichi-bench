@@ -39,6 +39,8 @@ Measured 2026-08-13 on an idle Linux server — Xeon E3-1230 v6 (4 cores,
 hyper-threading off, governor pinned to `performance`), Ubuntu 24.04, Go 1.26.4.
 goichi v0.2.0, fiber v3.4.0, gin v1.12.0, echo v4.15.4, chi v5.3.1, atreugo
 v11.13.2. Raw run: [`results/linux-v0.2.0.json`](results/linux-v0.2.0.json).
+goichi v0.5.0 was measured later, on another host; see
+[goichi v0.5.0, on a second host](#goichi-v050-on-a-second-host).
 
 ![HTTP throughput](docs/throughput.svg)
 
@@ -126,6 +128,63 @@ Prometheus instance that together hold about 7% of its CPU throughout. That
 background is the same for every framework and it is included in the drift
 figures above, but it is a reason to reproduce these numbers rather than trust
 them.
+
+### goichi v0.5.0, on a second host
+
+The figures above are goichi v0.2.0 on the Xeon E3-1230 v6. goichi v0.5.0 was
+measured on 2026-11-26 on a different machine, so its numbers are compared
+only with a v0.2.0 run made on that same machine the same afternoon, never with
+the tables above.
+
+The host is a dual Xeon Gold 6138 (2 × 20 cores, 80 threads) that also runs a
+Kubernetes test environment. Both runs were pinned with `taskset` to four
+physical cores on one NUMA node (2 for the server, 2 for the load generator,
+the same split as above), started only after the machine had been at least 97%
+idle for several minutes, and checked every two minutes for competing load.
+Go 1.26.4, the same versions of the other five frameworks. Raw runs:
+[`results/r640-v0.2.0.json`](results/r640-v0.2.0.json) and
+[`results/r640-v0.5.0.json`](results/r640-v0.5.0.json).
+
+| scenario | atreugo | fiber | goichi | gin | echo | chi |
+|---|---|---|---|---|---|---|
+| `static` | 105,525 | 104,890 | **94,996** | 69,275 | 69,111 | 66,921 |
+| `param` | 112,179 | 106,690 | **88,583** | 67,013 | 66,268 | 62,363 |
+| `params3` | 99,393 | 99,209 | **86,320** | 65,638 | 64,570 | 60,939 |
+| `json` | 99,129 | 97,749 | **88,871** | 63,004 | 62,786 | 61,402 |
+| `post` | 81,970 | 79,109 | **80,724** | 50,107 | 49,942 | 50,350 |
+| `many` | 108,234 | 89,328 | **88,558** | 66,536 | 65,474 | 62,086 |
+
+goichi keeps its place: third of six, 31–62% above gin, echo and chi, and
+0.9–17.0% below fiber, with `post` (+2.0%) and `many` (−0.9%) inside the noise.
+
+Against v0.2.0 on the same host:
+
+| scenario | v0.2.0 | v0.5.0 | | µs server CPU/req | allocs/op |
+|---|---|---|---|---|---|
+| `json` | 80,546 | 88,871 | **+10.3%** | 17.6 → 16.2 | 3 → 3 |
+| `many` | 82,165 | 88,558 | **+7.8%** | 17.5 → 16.3 | 5 → 5 |
+| `param` | 82,373 | 88,583 | **+7.5%** | 17.3 → 16.1 | 5 → 5 |
+| `static` | 89,445 | 94,996 | **+6.2%** | 15.5 → 14.4 | 2 → 2 |
+| `post` | 76,206 | 80,724 | **+5.9%** | 19.6 → 18.3 | 5 → **6** |
+| `params3` | 82,174 | 86,320 | **+5.0%** | 17.8 → 16.8 | 5 → 5 |
+
+The five other frameworks are the control: across all six scenarios they moved
+by a median of 0.8% and at most 4.9% between the two runs, and the spread
+inside a run was a median of ±1.0% (at most ±6.2%). goichi gained 5.0–10.3% on
+every scenario and spent 6–8% less server CPU per request, so the gain is real.
+
+It cannot be pinned on one change. v0.2.0 to v0.5.0 updates goichi's own
+dependencies, among them `fasthttp` v1.73.0 to v1.80.0 and `goccy/go-json`
+v0.10.6 to v0.12.0. The `fasthttp` update is forced on fiber and atreugo too,
+because a module graph carries one version of it, and the load generator uses
+it as well. Neither of those two frameworks moved, which suggests `fasthttp` is
+not where goichi's gain comes from, but this benchmark does not separate the
+causes.
+
+`post` now makes one more allocation per request (5 → 6) while allocating 19%
+fewer bytes (213 → 173 B). `cmd/compare` reports that as a regression, as it
+should: allocation counts are deterministic. It is not visible in throughput or
+CPU time, which both improved.
 
 ### In-process figures
 
