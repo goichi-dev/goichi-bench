@@ -6,7 +6,7 @@ require (
 	github.com/gin-gonic/gin v1.12.0
 	github.com/go-chi/chi/v5 v5.3.1
 	github.com/gofiber/fiber/v3 v3.4.0
-	github.com/goichi-dev/goichi v0.5.1
+	github.com/goichi-dev/goichi v0.6.0
 	github.com/labstack/echo/v4 v4.15.4
 	github.com/savsgio/atreugo/v11 v11.13.2
 	github.com/valyala/fasthttp v1.80.0
