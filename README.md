@@ -300,6 +300,14 @@ later.
 - **atreugo has no in-process figures.** It keeps its `fasthttp.RequestHandler`
   unexported, so it can only be driven through a real listener. It takes part
   in the HTTP phase and is reported as `n/a` in the in-process one.
+- **goichi does more per request than the others.** Its defaults install a
+  panic recoverer and six security headers (`X-Content-Type-Options`,
+  `X-Frame-Options`, `Referrer-Policy`, `X-Xss-Protection`,
+  `Content-Security-Policy`, `Strict-Transport-Security`) on every response.
+  fiber, gin (`gin.New`), echo, chi and atreugo are measured with no middleware
+  at all, as they ship. Its figures include that work, as its users pay for
+  it. Turning the headers off to close the gap would measure a configuration
+  nobody runs by default.
 - **One machine, one operating system.** Numbers measured elsewhere are not
   comparable to these. Re-run the suite on the host you care about.
 
