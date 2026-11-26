@@ -38,9 +38,9 @@ Two phases produce two kinds of number:
 Measured 2026-11-26 on a Linux server, Rocky Linux 10.2: a dual Xeon Gold 6138
 (2 × 20 cores, 80 threads) with the governor at `performance`. The run was pinned
 with `taskset` to four physical cores on one NUMA node, two for the server and
-two for the load generator. Go 1.26.4. goichi v0.5.1, fiber v3.4.0, gin v1.12.0,
+two for the load generator. Go 1.26.4. goichi v0.6.0, fiber v3.4.0, gin v1.12.0,
 echo v4.15.4, chi v5.3.1, atreugo v11.13.2. Raw run:
-[`results/r640-v0.5.1.json`](results/r640-v0.5.1.json).
+[`results/r640-v0.6.0.json`](results/r640-v0.6.0.json).
 
 ![HTTP throughput](docs/throughput.svg)
 
@@ -49,20 +49,20 @@ the correctness gate with zero errors:
 
 | scenario | atreugo | fiber | goichi | gin | echo | chi |
 |---|---|---|---|---|---|---|
-| `static` | 107,260 | 107,868 | **99,175** | 69,806 | 69,549 | 67,150 |
-| `param` | 108,226 | 109,068 | **88,729** | 67,649 | 66,206 | 62,740 |
-| `params3` | 99,477 | 102,739 | **88,663** | 66,143 | 65,430 | 60,901 |
-| `json` | 99,955 | 97,817 | **91,404** | 63,407 | 62,828 | 61,848 |
-| `post` | 80,416 | 81,380 | **82,978** | 50,330 | 50,451 | 50,286 |
-| `many` | 107,273 | 90,754 | **90,817** | 67,144 | 66,186 | 62,720 |
+| `static` | 105,639 | 106,278 | **98,517** | 69,411 | 69,505 | 67,418 |
+| `param` | 110,774 | 110,816 | **94,144** | 67,248 | 66,253 | 63,091 |
+| `params3` | 100,176 | 102,678 | **92,890** | 65,906 | 64,905 | 61,185 |
+| `json` | 100,742 | 98,802 | **90,917** | 63,152 | 63,186 | 61,574 |
+| `post` | 83,881 | 81,219 | **82,632** | 50,247 | 50,066 | 49,791 |
+| `many` | 108,183 | 91,290 | **89,962** | 66,833 | 65,924 | 62,508 |
 
 The frameworks separate into two groups, and the split is the HTTP stack rather
 than the router: atreugo, fiber and goichi sit on fasthttp, gin, echo and chi
-sit on `net/http`. goichi is the slowest of the fasthttp group, up to 18.6%
-below fiber, and 31–65% above the `net/http` routers on every scenario — a lead
-that belongs mostly to fasthttp, not to goichi's router. On `post` (+2.0%) and
-`many` (+0.1%) goichi and fiber are within the run-to-run drift measured below,
-so those are ties; on `static` (−8.1%) and `param` (−18.6%) the gap is real.
+sit on `net/http`. goichi is the slowest of the fasthttp group, up to 15.0%
+below fiber, and 35–66% above the `net/http` routers on every scenario — a lead
+that belongs mostly to fasthttp, not to goichi's router. On `post` (+1.7%) and
+`many` (−1.5%) goichi and fiber are within the run-to-run drift measured below,
+so those are ties; on `static` (−7.3%) and `param` (−15.0%) the gap is real.
 
 ![Server CPU per request](docs/server-cpu.svg)
 
@@ -72,12 +72,43 @@ after the network path stops:
 
 | µs of server CPU per request | `static` | `params3` | `post` |
 |---|---|---|---|
-| atreugo | 11.3 | 13.7 | 18.2 |
-| fiber | 11.4 | 13.2 | 18.7 |
-| **goichi** | **13.9** | **16.2** | **17.6** |
-| gin | 23.8 | 25.4 | 35.0 |
-| echo | 24.0 | 25.7 | 34.8 |
-| chi | 24.9 | 27.8 | 35.0 |
+| atreugo | 11.2 | 13.6 | 17.7 |
+| fiber | 11.4 | 13.2 | 18.8 |
+| **goichi** | **13.9** | **15.1** | **17.7** |
+| gin | 23.9 | 25.5 | 35.0 |
+| echo | 24.0 | 25.8 | 35.2 |
+| chi | 24.9 | 27.6 | 35.2 |
+
+### What v0.6.0 changed
+
+v0.6.0 reuses each request's `Context` and keeps the path parameters in a
+buffer inside it, instead of allocating a `Context` and a parameter map per
+request. To keep the comparison inside one window, v0.5.1 and v0.6.0 were
+measured alternately, twice each, against fiber, gin and chi as the control:
+[`results/ab-v0.5.1-v0.6.0/`](results/ab-v0.5.1-v0.6.0/). The figures are the
+mean of the two runs of each. The v0.6.0 runs were built, before the tag existed,
+from goichi commit `3710af5` through a `replace` directive, whose code is
+identical to the v0.6.0 tag; their result files therefore record the goichi
+version as `v0.5.1`, the one named in `go.mod` at the time.
+
+| scenario | v0.5.1 | v0.6.0 | | µs server CPU/req | allocs/op | B/op |
+|---|---|---|---|---|---|---|
+| `params3` | 87,595 | 92,083 | **+5.1%** | 16.3 → 15.2 | 5 → 2 | 448 → 80 |
+| `param` | 90,709 | 94,020 | **+3.6%** | 15.6 → 14.7 | 5 → 2 | 400 → 32 |
+| `many` | 89,742 | 92,676 | **+3.3%** | 15.8 → 15.0 | 5 → 2 | 416 → 48 |
+| `json` | 88,431 | 89,322 | +1.0% | 15.8 → 15.7 | 3 → 2 | 117 → 97 |
+| `post` | 82,087 | 82,641 | +0.7% | 17.8 → 17.7 | 6 → 5 | 173 → 141 |
+| `static` | 98,116 | 97,541 | −0.6% | 13.9 → 14.0 | 2 → 1 | 37 → 5 |
+
+The control frameworks moved by a median of 0.3% and at most 2.5%, so the three
+routes that capture parameters gain for real, and so does their CPU time (5–7%
+less per request). The other three lose one allocation each and are otherwise
+unchanged. On `param` goichi now allocates exactly what fiber does: 2
+allocations, 32 B.
+
+```bash
+go run ./cmd/compare -base results/ab-v0.5.1-v0.6.0/v0.5.1-1.json -new results/ab-v0.5.1-v0.6.0/v0.6.0-1.json
+```
 
 ### What v0.5.1 changed
 
@@ -180,9 +211,9 @@ these numbers rather than trust them.
 ### In-process figures
 
 The in-process phase measures allocations, and there goichi's `post` path is the
-lightest in the comparison — 6 allocations per request against fiber's 9 and
+lightest in the comparison — 5 allocations per request against fiber's 9 and
 gin's 14. Its nanoseconds-per-operation figures, however, are the slowest here
-(969 ns on `static` against fiber's 372 ns), which is not consistent with its
+(959 ns on `static` against fiber's 366 ns), which is not consistent with its
 HTTP result and should not be read as a cross-framework ranking: the phase calls
 each framework's own handler through each framework's own request object, and
 those are not the same object. Its job is to compare a framework against its own
